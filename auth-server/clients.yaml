@@ -1,0 +1,12 @@
+issuer: http://localhost:8082
+token_lifetime_seconds: 3600
+
+clients:
+  - id: example-client
+    secret: example-secret
+    scopes:
+      - messages:read
+      - messages:write
+    claims:
+      role: example
+      tenant_id: example-tenant
