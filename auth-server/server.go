@@ -7,8 +7,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"log"
-	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -18,6 +16,7 @@ import (
 	"github.com/veles-security/vapi/sub"
 	"github.com/veles-security/voauth/clientcredentials"
 	"github.com/veles-security/voauth/jwks"
+	"github.com/veles-security/voauth/jwksendpoint"
 	"github.com/veles-security/voauth/jwt"
 	"github.com/veles-security/voauth/tokenendpoint"
 	"github.com/veles-security/voauth/tokenrequest"
@@ -29,8 +28,7 @@ const keyID = "auth-server-signing-key"
 type server struct {
 	config        config
 	signer        *sig.Signer
-	jwks          *jwks.Jwks
-	jwksWriter    *jwks.Writer
+	jwksEndpoint  *jwksendpoint.JwksEndpoint
 	tokenEndpoint *tokenendpoint.TokenEndpoint
 }
 
@@ -43,13 +41,14 @@ func newServer(configuration config) (*server, error) {
 		return nil, fmt.Errorf("generate signing key: %w", err)
 	}
 	s.signer = &sig.Signer{Key: privateKey, Alg: sig.SigAlgRS256, Kid: keyID}
-	s.jwks = jwks.NewJwks(jwks.WithKeyFromSigner(s.signer))
 
-	jwksWriter, err := jwks.NewWriter()
+	jwksEndpoint, err := jwksendpoint.New(
+		jwksendpoint.WithJwksOption(jwks.WithKeyFromSigner(s.signer)),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("create JWKS writer: %w", err)
+		return nil, fmt.Errorf("create JWKS endpoint: %w", err)
 	}
-	s.jwksWriter = jwksWriter
+	s.jwksEndpoint = jwksEndpoint
 
 	tokenEndpoint, err := tokenendpoint.New(
 		tokenendpoint.WithTokenRequestValidatorOption(
@@ -68,13 +67,6 @@ func newServer(configuration config) (*server, error) {
 	s.tokenEndpoint = tokenEndpoint
 
 	return s, nil
-}
-
-func (s *server) handleJWKS(response http.ResponseWriter, request *http.Request) {
-	if err := s.jwksWriter.WriteArtifact(request.Context(), response, s.jwks); err != nil {
-		log.Printf("write JWKS: %v", err)
-		http.Error(response, "internal server error", http.StatusInternalServerError)
-	}
 }
 
 func (s *server) issuerOptions(ctx context.Context, request *tokenrequest.TokenRequest) ([]jwt.IssuerOption, error) {

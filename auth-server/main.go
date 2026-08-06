@@ -22,7 +22,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /jwks", application.handleJWKS)
+	mux.Handle("GET /jwks", application.jwksEndpoint)
 	mux.Handle("POST /token", application.tokenEndpoint)
 
 	log.Printf("Auth server listening on %s", *address)
