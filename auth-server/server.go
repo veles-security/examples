@@ -1,10 +1,11 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/subtle"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,9 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/veles-security/vapi"
 	"github.com/veles-security/vapi/sig"
+	"github.com/veles-security/vapi/sub"
+	"github.com/veles-security/voauth/clientcredentials"
 	"github.com/veles-security/voauth/jwks"
 	"github.com/veles-security/voauth/jwt"
+	"github.com/veles-security/voauth/tokenendpoint"
 	"github.com/veles-security/voauth/tokenrequest"
 	"github.com/veles-security/voauth/tokenresponse"
 )
@@ -22,43 +27,47 @@ import (
 const keyID = "auth-server-signing-key"
 
 type server struct {
-	config         config
-	requestReader  *tokenrequest.Reader
-	issuer         *jwt.Issuer
-	jwks           *jwks.Jwks
-	jwksWriter     *jwks.Writer
-	responseWriter *tokenresponse.Writer
+	config        config
+	signer        *sig.Signer
+	jwks          *jwks.Jwks
+	jwksWriter    *jwks.Writer
+	tokenEndpoint *tokenendpoint.TokenEndpoint
 }
 
 func newServer(configuration config) (*server, error) {
+	s := &server{
+		config: configuration,
+	}
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, fmt.Errorf("generate signing key: %w", err)
 	}
+	s.signer = &sig.Signer{Key: privateKey, Alg: sig.SigAlgRS256, Kid: keyID}
+	s.jwks = jwks.NewJwks(jwks.WithKeyFromSigner(s.signer))
 
-	requestReader, err := tokenrequest.NewReader()
-	if err != nil {
-		return nil, fmt.Errorf("create token request reader: %w", err)
-	}
 	jwksWriter, err := jwks.NewWriter()
 	if err != nil {
 		return nil, fmt.Errorf("create JWKS writer: %w", err)
 	}
-	responseWriter, err := tokenresponse.NewWriter()
+	s.jwksWriter = jwksWriter
+
+	tokenEndpoint, err := tokenendpoint.New(
+		tokenendpoint.WithTokenRequestValidatorOption(
+			tokenrequest.WithAllowedGrantTypes(tokenrequest.ClientCredentialsGrantType),
+		),
+		tokenendpoint.WithClientCredentialsValidatorOption(
+			clientcredentials.WithAllowedMethods(clientcredentials.ClientSecretPostAuthMethod),
+		),
+		tokenendpoint.WithJWTIssuerOption(jwt.WithSigner(s.signer)),
+		tokenendpoint.WithIssuerOptionsCallback(s.issuerOptions),
+		tokenendpoint.WithTokenResponseCallback(s.tokenResponse),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("create token response writer: %w", err)
+		return nil, fmt.Errorf("create token endpoint: %w", err)
 	}
+	s.tokenEndpoint = tokenEndpoint
 
-	signer := &sig.Signer{Key: privateKey, Alg: sig.SigAlgRS256, Kid: keyID}
-
-	return &server{
-		config:         configuration,
-		requestReader:  requestReader,
-		issuer:         jwt.NewIssuer(signer, jwt.WithIssuer(configuration.Issuer)),
-		jwks:           jwks.NewJwks(jwks.WithKeyFromSigner(signer)),
-		jwksWriter:     jwksWriter,
-		responseWriter: responseWriter,
-	}, nil
+	return s, nil
 }
 
 func (s *server) handleJWKS(response http.ResponseWriter, request *http.Request) {
@@ -68,68 +77,59 @@ func (s *server) handleJWKS(response http.ResponseWriter, request *http.Request)
 	}
 }
 
-func (s *server) handleToken(response http.ResponseWriter, request *http.Request) {
-	tokenRequest, err := s.requestReader.ReadArtifact(request.Context(), request)
+func (s *server) issuerOptions(ctx context.Context, request *tokenrequest.TokenRequest) ([]jwt.IssuerOption, error) {
+	client, err := s.authenticate(ctx, &request.ClientCredentials)
 	if err != nil {
-		writeOAuthError(response, http.StatusBadRequest, "invalid_request")
-		return
+		return nil, err
 	}
-	if tokenRequest.GrantType != tokenrequest.ClientCredentialsGrantType {
-		writeOAuthError(response, http.StatusBadRequest, "unsupported_grant_type")
-		return
-	}
-	credentials := tokenRequest.ClientCredentials
-	_, _, usedBasicAuth := request.BasicAuth()
-	if usedBasicAuth || credentials.ClientSecret == "" {
-		writeOAuthError(response, http.StatusUnauthorized, "invalid_client")
-		return
-	}
-
-	client, authenticated := s.authenticate(credentials.ClientId, credentials.ClientSecret)
-	if !authenticated {
-		writeOAuthError(response, http.StatusUnauthorized, "invalid_client")
-		return
-	}
-
-	grantedScopes, ok := grantScopes(tokenRequest.Scope, client.Scopes)
+	allowedScopes, ok := client.Attributes()["allowedScopes"].([]string)
 	if !ok {
-		writeOAuthError(response, http.StatusBadRequest, "invalid_scope")
-		return
+		return nil, vapi.NewErrorCategory(vapi.ErrPolicyRejected, errors.New("client has no allowed scopes"))
+	}
+
+	grantedScopes, ok := grantScopes(request.Scope, allowedScopes)
+	if !ok {
+		return nil, vapi.NewErrorCategory(vapi.ErrPolicyRejected, errors.New("requested scope is not allowed"))
 	}
 
 	lifetime := time.Duration(s.config.TokenLifetimeSeconds) * time.Second
-	accessToken, err := s.issuer.Issue(
-		request.Context(),
-		jwt.WithSubject(client.ID),
+	return []jwt.IssuerOption{
+		jwt.WithIssuer(s.config.Issuer),
+		jwt.WithSubject(client.Subject()),
 		jwt.WithExp(lifetime),
-		jwt.WithClaims(jwt.Cliams(client.Claims)),
-	)
-	if err != nil {
-		log.Printf("issue access token: %v", err)
-		writeOAuthError(response, http.StatusInternalServerError, "server_error")
-		return
-	}
-
-	err = s.responseWriter.WriteArtifact(request.Context(), response, &tokenresponse.TokenResponse{
-		AccessToken: accessToken,
-		TokenType:   "Bearer",
-		ExpiresIn:   lifetime,
-		Scope:       strings.Join(grantedScopes, " "),
-	})
-	if err != nil {
-		log.Printf("write token response: %v", err)
-	}
+		jwt.WithClaims(jwt.Cliams(client.Claims())),
+		jwt.WithClaims(jwt.Cliams{"scope": strings.Join(grantedScopes, " ")}),
+	}, nil
 }
 
-func (s *server) authenticate(id, secret string) (clientConfig, bool) {
+func (s *server) tokenResponse(_ context.Context, _ *tokenrequest.TokenRequest, accessToken *jwt.Token) (*tokenresponse.TokenResponse, error) {
+	grantedScopes, ok := accessToken.Claims["scope"].(string)
+	if !ok {
+		return nil, vapi.NewErrorCategory(vapi.ErrInternal, errors.New("issued access token has no scope claim"))
+	}
+	return &tokenresponse.TokenResponse{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   time.Duration(s.config.TokenLifetimeSeconds) * time.Second,
+		Scope:       grantedScopes,
+	}, nil
+}
+
+func (s *server) authenticate(_ context.Context, credentials *clientcredentials.ClientCredentials) (vapi.Principal, error) {
 	for _, client := range s.config.Clients {
-		idMatches := subtle.ConstantTimeCompare([]byte(client.ID), []byte(id)) == 1
-		secretMatches := subtle.ConstantTimeCompare([]byte(client.Secret), []byte(secret)) == 1
+		idMatches := subtle.ConstantTimeCompare([]byte(client.ID), []byte(credentials.ClientId)) == 1
+		secretMatches := subtle.ConstantTimeCompare([]byte(client.Secret), []byte(credentials.ClientSecret)) == 1
 		if idMatches && secretMatches {
-			return client, true
+			return sub.NewBasePrincipal(
+				s.config.Issuer,
+				client.ID,
+				"",
+			).WithClaims(client.Claims).WithAttributes(map[string]any{
+				"allowedScopes": client.Scopes,
+			}), nil
 		}
 	}
-	return clientConfig{}, false
+	return nil, vapi.ErrUnauthenticated
 }
 
 func grantScopes(requested string, allowed []string) ([]string, bool) {
@@ -143,14 +143,4 @@ func grantScopes(requested string, allowed []string) ([]string, bool) {
 		}
 	}
 	return requestedScopes, true
-}
-
-func writeOAuthError(response http.ResponseWriter, status int, code string) {
-	response.Header().Set("Content-Type", "application/json;charset=UTF-8")
-	response.Header().Set("Cache-Control", "no-store")
-	response.Header().Set("Pragma", "no-cache")
-	response.WriteHeader(status)
-	if err := json.NewEncoder(response).Encode(map[string]string{"error": code}); err != nil {
-		log.Printf("write OAuth error: %v", err)
-	}
 }
