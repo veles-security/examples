@@ -61,10 +61,18 @@ func newServer(configuration config) (*server, error) {
 					clientcredentials.WithValidatorAllowedMethods(clientcredentials.ClientSecretPostAuthMethod),
 				),
 			),
-			tokenrequest.WithAuthenticatorClientAuthenticatorOptions(
-				clientcredentials.WithAuthenticatorAuthCallback(clientcredentials.ClientSecretPostAuthMethod, s.authenticateClient),
+			tokenrequest.WithAuthenticatorResolverOptions(
+				tokenrequest.WithResolverClientResolverOptions(
+					clientcredentials.WithResolverRuntimeOptions(
+						clientcredentials.WithResolverAuthenticationMethod(clientcredentials.ClientSecretPostAuthMethod, s.authenticateClient),
+					),
+				),
+				tokenrequest.WithResolverRuntimeOptions(
+					func(_ tokenrequest.ResolveFunc) tokenrequest.ResolveFunc {
+						return s.authenticateSubject
+					},
+				),
 			),
-			tokenrequest.WithAuthenticatorAuthCallback(tokenrequest.ClientCredentialsGrantType, s.authenticateClientCredentialsGrant),
 		),
 		tokenendpoint.WithIssuerOptions(
 			jwt.WithSigner(s.signer),
@@ -93,7 +101,7 @@ func (s *server) authenticateClient(_ context.Context, credentials *clientcreden
 	return nil, vapi.NewErrorCategory(vapi.ErrUnauthenticated, errors.New("invalid client credentials"))
 }
 
-func (s *server) authenticateClientCredentialsGrant(_ context.Context, request *tokenrequest.TokenRequest, client vapi.Principal) (vapi.Principal, error) {
+func (s *server) authenticateSubject(_ context.Context, request *tokenrequest.TokenRequest, client vapi.Principal) (vapi.Principal, error) {
 	if client == nil {
 		return nil, vapi.NewErrorCategory(vapi.ErrUnauthenticated, errors.New("client credentials grant requires an authenticated client"))
 	}
@@ -114,11 +122,7 @@ func (s *server) authenticateClientCredentialsGrant(_ context.Context, request *
 		WithGrantedScopes(grantedScopes...), nil
 }
 
-func (s *server) prepareIssuerOptions(_ context.Context, principal vapi.ScopedPrincipal, request *tokenrequest.TokenRequest) (tokenendpoint.IssuerOptions, error) {
-	if request.GrantType != tokenrequest.ClientCredentialsGrantType {
-		return tokenendpoint.IssuerOptions{}, vapi.NewErrorCategory(vapi.ErrUnsupported, fmt.Errorf("unsupported grant type %q", request.GrantType))
-	}
-
+func (s *server) prepareIssuerOptions(_ context.Context, principal vapi.ScopedPrincipal) (tokenendpoint.IssuerOptions, error) {
 	return tokenendpoint.IssuerOptions{
 		AccessToken: []jwt.IssuerOption{
 			jwt.WithIssuer(s.config.Issuer),
