@@ -20,6 +20,7 @@ import (
 	"github.com/veles-security/voauth/clientcredentials"
 	"github.com/veles-security/voauth/jwt"
 	"github.com/veles-security/voauth/tokenendpoint"
+	"github.com/veles-security/voauth/tokenendpoint/presets"
 	"github.com/veles-security/voauth/tokenrequest"
 )
 
@@ -65,30 +66,15 @@ func newServer(configuration config) (*server, error) {
 	}
 
 	s.tokenEndpoint, err = tokenendpoint.New(
-		tokenendpoint.WithTokenRequestAuthenticatorOptions(
-			tokenrequest.WithAuthenticatorValidatorOptions(
-				tokenrequest.WithAllowedGrantTypes(tokenrequest.ClientCredentialsGrantType),
-				tokenrequest.WithClientCredentialsValidatoOptions(
-					clientcredentials.WithValidatorAllowedMethods(clientcredentials.ClientSecretPostAuthMethod),
-				),
-			),
-			tokenrequest.WithAuthenticatorResolverOptions(
-				tokenrequest.WithResolverClientResolverOptions(
-					clientcredentials.WithResolverRuntimeOptions(
-						clientcredentials.WithResolverAuthenticationMethod(clientcredentials.ClientSecretPostAuthMethod, s.authenticateClient),
-					),
-				),
-				tokenrequest.WithResolverRuntimeOptions(
-					tokenrequest.WithResolveFunc(s.authenticateSubject),
-				),
-			),
+		presets.Authenticator(
+			presets.GrantTypes(tokenrequest.ClientCredentialsGrantType),
+			presets.ClientAuthentication(clientcredentials.ClientSecretPostAuthMethod, s.authenticateClient),
+			presets.ResolveSubject(s.authenticateSubject),
 		),
-		tokenendpoint.WithIssuerOptions(
-			jwt.WithSigner(signer),
+		presets.Signer(signer),
+		presets.Tokens(
+			presets.AccessToken(s.prepareAccessTokenOptions),
 		),
-		tokenendpoint.WithTokenResponseWriterOptions(),
-		tokenendpoint.WithIssuedTokens(tokenendpoint.IssuedAccessToken),
-		tokenendpoint.WithIssuerOptionsCallback(s.prepareIssuerOptions),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("token endpoint init failed: %w", err)
@@ -131,13 +117,11 @@ func (s *server) authenticateSubject(_ context.Context, request *tokenrequest.To
 		WithGrantedScopes(grantedScopes...), nil
 }
 
-func (s *server) prepareIssuerOptions(_ context.Context, principal vapi.ScopedPrincipal) (tokenendpoint.IssuerOptions, error) {
-	return tokenendpoint.IssuerOptions{
-		AccessToken: []jwt.IssuerOption{
-			jwt.WithIssuer(s.config.Issuer),
-			jwt.WithExp(time.Duration(s.config.TokenLifetimeSeconds) * time.Second),
-			jwt.WithClaims(jwt.Cliams{"scope": strings.Join(principal.GrantedScopes(), " ")}),
-		},
+func (s *server) prepareAccessTokenOptions(_ context.Context, principal vapi.ScopedPrincipal) ([]jwt.IssuerOption, error) {
+	return []jwt.IssuerOption{
+		jwt.WithIssuer(s.config.Issuer),
+		jwt.WithExp(time.Duration(s.config.TokenLifetimeSeconds) * time.Second),
+		jwt.WithClaims(jwt.Cliams{"scope": strings.Join(principal.GrantedScopes(), " ")}),
 	}, nil
 }
 

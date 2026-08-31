@@ -4,7 +4,7 @@ go 1.26.7
 
 require (
 	github.com/veles-security/vapi v1.11.0
-	github.com/veles-security/voauth v1.2.0
+	github.com/veles-security/voauth v1.3.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
