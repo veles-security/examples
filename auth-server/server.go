@@ -11,7 +11,7 @@ import (
 
 	"github.com/veles-security/vapi"
 	"github.com/veles-security/vapi/sub"
-	_ "github.com/veles-security/vcrypt/backend/rsa"
+	"github.com/veles-security/vcrypt/backend/rsa"
 	"github.com/veles-security/vcrypt/jwksendpoint"
 	"github.com/veles-security/vcrypt/jws"
 	"github.com/veles-security/vcrypt/key"
@@ -38,7 +38,10 @@ func newServer(configuration config) (*server, error) {
 	}
 
 	// keystore
-	keystore, err := keystore.New(keystore.WithSource(randomsource.New(keySource, randomsource.RSA2048, 24*time.Hour)))
+	keystore, err := keystore.New(
+		keystore.WithSource(randomsource.New(keySource, randomsource.RSA2048, 24*time.Hour)),
+		keystore.WithRuntimeOptions(keystore.WithAlgorithms(rsa.RS256)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("keystore init failed: %w", err)
 	}
