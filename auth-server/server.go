@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -12,45 +10,55 @@ import (
 	"time"
 
 	"github.com/veles-security/vapi"
-	"github.com/veles-security/vapi/sig"
 	"github.com/veles-security/vapi/sub"
+	_ "github.com/veles-security/vcrypt/backend/rsa"
+	"github.com/veles-security/vcrypt/jwksendpoint"
+	"github.com/veles-security/vcrypt/jws"
+	"github.com/veles-security/vcrypt/key"
+	"github.com/veles-security/vcrypt/keysource/randomsource"
+	"github.com/veles-security/vcrypt/keystore"
 	"github.com/veles-security/voauth/clientcredentials"
-	"github.com/veles-security/voauth/jwks"
-	"github.com/veles-security/voauth/jwksendpoint"
 	"github.com/veles-security/voauth/jwt"
 	"github.com/veles-security/voauth/tokenendpoint"
 	"github.com/veles-security/voauth/tokenrequest"
 )
 
-const keyID = "auth-server-signing-key"
+const keySource = "app"
 
 type server struct {
 	config        config
-	signer        *sig.Signer
+	keystore      keystore.Keystore
 	jwksEndpoint  *jwksendpoint.JwksEndpoint
 	tokenEndpoint *tokenendpoint.TokenEndpoint
 }
 
 func newServer(configuration config) (*server, error) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, fmt.Errorf("generate signing key: %w", err)
-	}
-
 	s := &server{
 		config: configuration,
-		signer: &sig.Signer{
-			Key: privateKey,
-			Alg: sig.SigAlgRS256,
-			Kid: keyID,
-		},
 	}
 
-	s.jwksEndpoint, err = jwksendpoint.New(
-		jwksendpoint.WithJwksOption(jwks.WithKeyFromSigner(s.signer)),
+	// keystore
+	keystore, err := keystore.New(keystore.WithSource(randomsource.New(keySource, randomsource.RSA2048, 24*time.Hour)))
+	if err != nil {
+		return nil, fmt.Errorf("keystore init failed: %w", err)
+	}
+	s.keystore = keystore
+
+	// signer
+	signer, err := jws.New(
+		jws.WithSignerKeystore(&keystore),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create JWKS endpoint: %w", err)
+		return nil, fmt.Errorf("signer init failed: %w", err)
+	}
+
+	// jwks
+	s.jwksEndpoint, err = jwksendpoint.New(
+		jwksendpoint.WithKeystore(keystore),
+		jwksendpoint.WithKeySelector(key.Select(key.WithSource(keySource))),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("JWKS endpoint init failed: %w", err)
 	}
 
 	s.tokenEndpoint, err = tokenendpoint.New(
@@ -68,21 +76,19 @@ func newServer(configuration config) (*server, error) {
 					),
 				),
 				tokenrequest.WithResolverRuntimeOptions(
-					func(_ tokenrequest.ResolveFunc) tokenrequest.ResolveFunc {
-						return s.authenticateSubject
-					},
+					tokenrequest.WithResolveFunc(s.authenticateSubject),
 				),
 			),
 		),
 		tokenendpoint.WithIssuerOptions(
-			jwt.WithSigner(s.signer),
+			jwt.WithSigner(signer),
 		),
 		tokenendpoint.WithTokenResponseWriterOptions(),
 		tokenendpoint.WithIssuedTokens(tokenendpoint.IssuedAccessToken),
 		tokenendpoint.WithIssuerOptionsCallback(s.prepareIssuerOptions),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create token endpoint: %w", err)
+		return nil, fmt.Errorf("token endpoint init failed: %w", err)
 	}
 
 	return s, nil
