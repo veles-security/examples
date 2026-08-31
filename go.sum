@@ -6,6 +6,8 @@ github.com/veles-security/vapi v1.10.0 h1:4Encpb0RbW3w/OeigWzJVgC+hZvR4S8IFUiDAR
 github.com/veles-security/vapi v1.10.0/go.mod h1:lNjbdnY/29O3pcOvmqBM23iR9Vt+w9BH50v7iEAVDi8=
 github.com/veles-security/vcrypt v1.2.0 h1:5a8dXYGtwN/Oh3/FyH0KZsTSmPJn5qpu7Wyx7KBreuc=
 github.com/veles-security/vcrypt v1.2.0/go.mod h1:JHLWX2KZBmCGJVD+xZsRv/mo18lp7fuCDl4dE0XK0Dg=
+github.com/veles-security/vcrypt v1.3.0 h1:YaR/g16aung/9nLNne5p7FeT4tiO+FOKWP6F9itGr0Y=
+github.com/veles-security/vcrypt v1.3.0/go.mod h1:JHLWX2KZBmCGJVD+xZsRv/mo18lp7fuCDl4dE0XK0Dg=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=

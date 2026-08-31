@@ -37,19 +37,19 @@ func newServer(configuration config) (*server, error) {
 		config: configuration,
 	}
 
-	// keystore
+	// keystore with a random key source
 	keystore, err := keystore.New(
 		keystore.WithSource(randomsource.New(keySource, randomsource.RSA2048, 24*time.Hour)),
-		keystore.WithRuntimeOptions(keystore.WithAlgorithms(rsa.RS256)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("keystore init failed: %w", err)
 	}
 	s.keystore = keystore
 
-	// signer
+	// signer with a default runtime option adding the RS256 signature alg
 	signer, err := jws.New(
 		jws.WithSignerKeystore(&keystore),
+		jws.WithSignerRuntimeOptions(jws.WithAlgorithm(rsa.RS256)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("signer init failed: %w", err)
